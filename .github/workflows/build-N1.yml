@@ -222,6 +222,10 @@ jobs:
           rootfs_partsize="${{ github.event.inputs.rootfs_partsize }}"
           luci_version="${{ github.event.inputs.luci_version }}"
           
+          # ✨ 新增逻辑：提取大版本号用于匹配 Docker 镜像 tag (例如将 25.12.5 转换为 25.12)
+          docker_tag=$(echo "$luci_version" | cut -d'.' -f1,2)
+          echo "LuCI Version: $luci_version -> Docker Tag Match: $docker_tag"
+          
           IFS=',' read -r -a profile_array <<< "$profiles"
           
           for profile in "${profile_array[@]}"; do
@@ -239,7 +243,7 @@ jobs:
               -e PROFILE=$profile \
               -e INCLUDE_DOCKER=$include_docker \
               -e ROOTFS_PARTSIZE=$rootfs_partsize \
-              immortalwrt/imagebuilder:armsr-armv8-openwrt-${luci_version} /bin/bash /home/build/immortalwrt/build.sh
+              immortalwrt/imagebuilder:armsr-armv8-openwrt-${docker_tag} /bin/bash /home/build/immortalwrt/build.sh
           done
           
       - name: Download prebuilt rootfs.tar.gz
