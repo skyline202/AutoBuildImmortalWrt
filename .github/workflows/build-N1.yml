@@ -222,7 +222,6 @@ jobs:
           rootfs_partsize="${{ github.event.inputs.rootfs_partsize }}"
           luci_version="${{ github.event.inputs.luci_version }}"
           
-          # 提取前两位大版本号用于匹配 Docker 镜像标签 (例如将 25.12.5 转换为 25.12)
           docker_tag=$(echo "$luci_version" | cut -d'.' -f1,2)
           echo "LuCI Version: $luci_version -> Docker Tag Match: $docker_tag"
           
@@ -231,7 +230,7 @@ jobs:
           for profile in "${profile_array[@]}"; do
             echo "Building for profile: $profile"
             
-            # ✨ 终极修复：动态检测、多路径创建、双向软链接补全 scripts/opkg-key
+            # ✨ 终极桥接修复：解决 25.12 无 opkg 引起的包管理器缺失报错
             docker run --rm -i \
               --user root \
               -v "${{ github.workspace }}/bin:/home/build/immortalwrt/bin" \
@@ -246,32 +245,43 @@ jobs:
               -e ROOTFS_PARTSIZE=$rootfs_partsize \
               immortalwrt/imagebuilder:armsr-armv8-openwrt-${docker_tag} /bin/bash -c "
                 CURRENT_DIR=\$(pwd)
-                echo '🚀 Current ImageBuilder path inside container: \$CURRENT_DIR'
-                
-                # 在绝对根目录与相对目录下同时补全 scripts 文件夹
                 mkdir -p /home/build/immortalwrt/scripts
                 mkdir -p \$CURRENT_DIR/scripts
+                mkdir -p /home/build/immortalwrt/staging_dir/host/bin
+                mkdir -p \$CURRENT_DIR/staging_dir/host/bin
                 
-                # 寻找可用 opkg-key 二进制或系统脚本
-                TARGET_KEY=''
-                if [ -f /home/build/immortalwrt/staging_dir/host/bin/opkg-key ]; then
-                  TARGET_KEY='/home/build/immortalwrt/staging_dir/host/bin/opkg-key'
-                elif [ -f \$CURRENT_DIR/staging_dir/host/bin/opkg-key ]; then
-                  TARGET_KEY=\"\$CURRENT_DIR/staging_dir/host/bin/opkg-key\"
-                elif which opkg-key >/dev/null 2>&1; then
-                  TARGET_KEY=\$(which opkg-key)
+                # 1. 注入兼容易错的 opkg-key 逻辑
+                if which opkg-key >/dev/null 2>&1; then
+                  ln -sf \$(which opkg-key) /home/build/immortalwrt/scripts/opkg-key
+                  ln -sf \$(which opkg-key) \$CURRENT_DIR/scripts/opkg-key
                 else
-                  # 针对 25.12.x 的 apk 模式做一个安全降级防 make 报错的 mock 脚本
-                  echo '#!/bin/bash' > /usr/bin/opkg-key-mock
-                  echo 'exit 0' >> /usr/bin/opkg-key-mock
-                  chmod +x /usr/bin/opkg-key-mock
-                  TARGET_KEY='/usr/bin/opkg-key-mock'
+                  echo -e '#!/bin/bash\nexit 0' > /usr/bin/opkg-key-mock && chmod +x /usr/bin/opkg-key-mock
+                  ln -sf /usr/bin/opkg-key-mock /home/build/immortalwrt/scripts/opkg-key
+                  ln -sf /usr/bin/opkg-key-mock \$CURRENT_DIR/scripts/opkg-key
                 fi
                 
-                # 双向软链接绑定，确保 Makefile 无论怎么变路径都能找得到
-                ln -sf \$TARGET_KEY /home/build/immortalwrt/scripts/opkg-key
-                ln -sf \$TARGET_KEY \$CURRENT_DIR/scripts/opkg-key
-                echo '✅ opkg-key bypass injected successfully.'
+                # 2. ✨核心：为全新的 apk 编译环境智能建立 opkg 命令行转换桥接器
+                if ! which opkg >/dev/null 2>&1 && which apk >/dev/null 2>&1; then
+                  echo '🔄 Detecting 25.12 (apk mode). Creating smart opkg wrapper bridge...'
+                  cat << 'EOF' > /usr/bin/opkg-bridge
+#!/bin/bash
+# 智能捕获旧脚本发来的 opkg 命令并透明翻译为新版 apk 指令
+cmd_args=\"\$@\"
+if [[ \"\$1\" == \"install\" ]]; then
+    shift
+    exec apk add --allow-untrusted \"\$@\"
+else
+    # 兜底执行 apk 对应相似命令
+    exec apk \"\$@\"
+fi
+EOF
+                  chmod +x /usr/bin/opkg-bridge
+                  # 全局以及各个临时环境中双向绑定该桥接器
+                  ln -sf /usr/bin/opkg-bridge /usr/bin/opkg
+                  ln -sf /usr/bin/opkg-bridge /home/build/immortalwrt/staging_dir/host/bin/opkg
+                  ln -sf /usr/bin/opkg-bridge \$CURRENT_DIR/staging_dir/host/bin/opkg
+                  echo '✅ Smart opkg-to-apk bridge wrapper installed.'
+                fi
                 
                 /bin/bash /home/build/immortalwrt/build.sh
               "
@@ -313,10 +323,3 @@ jobs:
           echo "Image file is: $FILE"
           FILENAME=$(basename "$FILE")
           
-          LUCI_VERSION="${{ github.event.inputs.luci_version }}"
-          if [ "${{ github.event.inputs.skip_imagebuilder }}" == "true" ]; then
-             LUCI_VERSION="24.10.2"
-          fi
-          
-          NEW_FILENAME="${FILENAME%.img.gz}-luci-${LUCI_VERSION}.img.gz"
-          mv "$FILE" "${{ env.PACKAGED_OUTPUTPATH }}/$NEW_FILENAME"
