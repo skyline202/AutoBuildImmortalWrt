@@ -222,7 +222,7 @@ jobs:
           rootfs_partsize="${{ github.event.inputs.rootfs_partsize }}"
           luci_version="${{ github.event.inputs.luci_version }}"
           
-          # ✨ 新增逻辑：提取大版本号用于匹配 Docker 镜像 tag (例如将 25.12.5 转换为 25.12)
+          # 提取前两位大版本号用于匹配 Docker 镜像标签 (例如将 25.12.5 转换为 25.12)
           docker_tag=$(echo "$luci_version" | cut -d'.' -f1,2)
           echo "LuCI Version: $luci_version -> Docker Tag Match: $docker_tag"
           
@@ -287,7 +287,7 @@ jobs:
              LUCI_VERSION="24.10.2"
           fi
           
-          # 生成带上精准自定义 luci 版本号的新文件名
+          # ✨ 补全缺失的重命名逻辑
           NEW_FILENAME="${FILENAME%.img.gz}-luci-${LUCI_VERSION}.img.gz"
           mv "$FILE" "${{ env.PACKAGED_OUTPUTPATH }}/$NEW_FILENAME"
           echo "New image filename: $NEW_FILENAME"
