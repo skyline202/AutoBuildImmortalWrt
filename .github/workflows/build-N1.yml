@@ -231,6 +231,7 @@ jobs:
           for profile in "${profile_array[@]}"; do
             echo "Building for profile: $profile"
             
+            # ✨ 核心修复：在进入编译前，动态检测并修复 25.12 缺失的 scripts/opkg-key 软链接
             docker run --rm -i \
               --user root \
               -v "${{ github.workspace }}/bin:/home/build/immortalwrt/bin" \
@@ -243,7 +244,18 @@ jobs:
               -e PROFILE=$profile \
               -e INCLUDE_DOCKER=$include_docker \
               -e ROOTFS_PARTSIZE=$rootfs_partsize \
-              immortalwrt/imagebuilder:armsr-armv8-openwrt-${docker_tag} /bin/bash /home/build/immortalwrt/build.sh
+              immortalwrt/imagebuilder:armsr-armv8-openwrt-${docker_tag} /bin/bash -c "
+                mkdir -p /home/build/immortalwrt/scripts
+                if [ ! -f /home/build/immortalwrt/scripts/opkg-key ]; then
+                  echo '🔄 Detecting 25.12+ ImageBuilder structure, fixing opkg-key path...'
+                  if [ -f /home/build/immortalwrt/staging_dir/host/bin/opkg-key ]; then
+                    ln -sf /home/build/immortalwrt/staging_dir/host/bin/opkg-key /home/build/immortalwrt/scripts/opkg-key
+                  elif which opkg-key >/dev/null 2>&1; then
+                    ln -sf \$(which opkg-key) /home/build/immortalwrt/scripts/opkg-key
+                  fi
+                fi
+                /bin/bash /home/build/immortalwrt/build.sh
+              "
           done
           
       - name: Download prebuilt rootfs.tar.gz
@@ -287,7 +299,6 @@ jobs:
              LUCI_VERSION="24.10.2"
           fi
           
-          # ✨ 补全缺失的重命名逻辑
           NEW_FILENAME="${FILENAME%.img.gz}-luci-${LUCI_VERSION}.img.gz"
           mv "$FILE" "${{ env.PACKAGED_OUTPUTPATH }}/$NEW_FILENAME"
           echo "New image filename: $NEW_FILENAME"
